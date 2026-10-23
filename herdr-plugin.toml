@@ -1,0 +1,86 @@
+id = "herdr-stats"
+name = "Stats"
+version = "0.1.0"
+# Needs the [ui] tab_bar_right command entry (herdr 0.8.2).
+min_herdr_version = "0.8.2"
+description = "Live CPU, memory, disk, temperature, GPU, power and network stats in the corner of the tab bar"
+platforms = ["linux", "macos"]
+
+# Builds bin/herdr-stats and bin/herdr-stats-bar with cargo. `herdr plugin link`
+# skips this step: run `sh scripts/build.sh` yourself for a local checkout.
+[[build]]
+command = ["sh", "scripts/build.sh"]
+
+# Points the tab bar entry at this install and starts the sampling daemon.
+# The daemon also starts on demand and exits after three idle minutes.
+[[startup]]
+command = ["bin/herdr-stats", "start"]
+
+[[actions]]
+id = "setup"
+title = "Stats: show in tab bar"
+description = "Add the stats to [ui] tab_bar_right in herdr's config and reload it"
+contexts = ["global"]
+command = ["bin/herdr-stats", "setup"]
+
+[[actions]]
+id = "remove"
+title = "Stats: remove from tab bar"
+description = "Take the stats out of herdr's config and reload it"
+contexts = ["global"]
+command = ["bin/herdr-stats", "setup", "--remove"]
+
+[[actions]]
+id = "preview"
+title = "Stats: preview presets"
+description = "Every preset, live, on a mock of your tab bar"
+contexts = ["global"]
+command = ["bin/herdr-stats", "open", "preview"]
+
+[[actions]]
+id = "config"
+title = "Stats: edit config"
+description = "Open the stats config in $EDITOR"
+contexts = ["global"]
+command = ["bin/herdr-stats", "open", "config"]
+
+[[actions]]
+id = "doctor"
+title = "Stats: doctor"
+description = "Sensors, sampling cost, daemon and setup state"
+contexts = ["global"]
+command = ["bin/herdr-stats", "open", "doctor"]
+
+[[actions]]
+id = "restart"
+title = "Stats: restart daemon"
+description = "Restart the background sampler"
+contexts = ["global"]
+command = ["bin/herdr-stats", "restart"]
+
+[[panes]]
+id = "preview"
+title = "Stats preview"
+description = "Every preset, live, on a mock of your tab bar"
+placement = "popup"
+width = "92%"
+height = "50%"
+command = ["bin/herdr-stats", "preview", "--presets"]
+
+[[panes]]
+id = "doctor"
+title = "Stats doctor"
+description = "Sensors, sampling cost, daemon and setup state"
+placement = "popup"
+width = "84%"
+height = "80%"
+command = ["bin/herdr-stats", "doctor", "--wait"]
+
+[[panes]]
+id = "config"
+title = "Stats config"
+description = "Edit the stats config"
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["bin/herdr-stats", "config", "--edit"]

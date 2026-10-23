@@ -1,0 +1,82 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    timeout-minutes: 30
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.99.1
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --release --locked --all-targets -- -D warnings
+      # Besides the unit tests, tests/bar.rs runs the tab bar client against a
+      # real daemon, so each platform's samplers read this runner's hardware.
+      - name: Tests
+        run: cargo test --release --locked
+      # What the samplers found on this runner, for when a reading looks wrong.
+      - name: Doctor
+        env:
+          HERDR_PLUGIN_STATE_DIR: ${{ runner.temp }}/hs/state
+          HERDR_PLUGIN_CONFIG_DIR: ${{ runner.temp }}/hs/config
+        run: |
+          target/release/herdr-stats doctor
+          target/release/herdr-stats stop
+
+  # Cargo.toml's rust-version: the oldest toolchain scripts/build.sh's cargo
+  # fallback is promised to work with.
+  msrv:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Tests
+        run: cargo test --locked
+
+  # The installer herdr runs: shellcheck it, and on a pull request make sure
+  # the cargo fallback path still produces both binaries.
+  installer:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Shellcheck
+        run: shellcheck scripts/build.sh
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Build from source
+        env:
+          HERDR_STATS_BUILD: source
+        run: |
+          sh scripts/build.sh
+          bin/herdr-stats --version
+          bin/herdr-stats-bar --version

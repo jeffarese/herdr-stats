@@ -1,0 +1,41 @@
+[package]
+name = "herdr-stats"
+version = "0.1.0"
+edition = "2021"
+# The oldest toolchain scripts/build.sh's cargo fallback is promised to work
+# with; CI checks it. The locked indexmap/hashbrown need 1.85.
+rust-version = "1.85"
+description = "Live CPU, memory, disk and temperature in the corner of herdr's tab bar"
+license = "MIT"
+repository = "https://github.com/jeffarese/herdr-stats"
+readme = "README.md"
+keywords = ["herdr", "herdr-plugin", "system-monitor", "tui", "status-bar"]
+categories = ["command-line-utilities"]
+publish = false
+
+# The daemon: samples the machine and renders the status line.
+[[bin]]
+name = "herdr-stats"
+path = "src/main.rs"
+
+# What herdr runs every second. It only asks the daemon for the current line, so
+# it is kept apart from the sampling code and links nothing but libSystem.
+[[bin]]
+name = "herdr-stats-bar"
+path = "src/bar.rs"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+toml_edit = "0.22"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation-sys = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

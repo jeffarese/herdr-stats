@@ -1,0 +1,188 @@
+name: release
+
+# Builds both binaries for every platform the plugin supports and attaches them
+# to the GitHub release for the tag.
+#
+# Asset names are a contract with scripts/build.sh, do not change them:
+#   herdr-stats-<os>-<arch>.tar.gz   os in {linux, macos}, arch in {x86_64, aarch64};
+#                                    holds herdr-stats and herdr-stats-bar
+#   SHA256SUMS                       "<sha256>  <asset name>" per archive
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+  # Pull requests and main build every asset but publish nothing, so a broken
+  # target shows up before the tag does.
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach binaries to (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  RELEASING: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  # build.sh downloads v<manifest version>, so a tag that disagrees with either
+  # version source would publish binaries nobody can install.
+  versions:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - name: Tag matches every version source
+        run: |
+          grab() { sed -n -E "s/$2/\1/p" "$1" | head -n 1; }
+          plugin="v$(grab herdr-plugin.toml '^version[[:space:]]*=[[:space:]]*"([^"]+)".*')"
+          cargo="v$(grab Cargo.toml '^version[[:space:]]*=[[:space:]]*"([^"]+)".*')"
+          printf '%-20s %s\n' tag "$TAG" herdr-plugin.toml "$plugin" Cargo.toml "$cargo"
+          for found in "$plugin" "$cargo"; do
+            if [ "$found" != "$TAG" ]; then
+              echo "version mismatch: the tag and every version source must agree" >&2
+              exit 1
+            fi
+          done
+
+  build:
+    needs: versions
+    # Run when versions passed, or when it was skipped because nothing is released.
+    if: ${{ !cancelled() && (needs.versions.result == 'success' || needs.versions.result == 'skipped') }}
+    name: build ${{ matrix.asset }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # musl targets link statically with Rust's bundled musl; the only
+          # C-facing dependency is the libc crate, so no musl toolchain is needed.
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+            asset: herdr-stats-linux-x86_64
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            asset: herdr-stats-linux-aarch64
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            asset: herdr-stats-macos-x86_64
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            asset: herdr-stats-macos-aarch64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.RELEASING == 'true' && env.TAG || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.99.1
+          targets: ${{ matrix.target }}
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked --target "$TARGET"
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+          ASSET: ${{ matrix.asset }}
+        run: |
+          mkdir -p dist
+          tar -czf "dist/$ASSET.tar.gz" -C "target/$TARGET/release" herdr-stats herdr-stats-bar
+          tar -tzvf "dist/$ASSET.tar.gz"
+      - name: Check static linkage
+        if: contains(matrix.target, 'linux-musl')
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          for name in herdr-stats herdr-stats-bar; do
+            file "target/$TARGET/release/$name"
+            file "target/$TARGET/release/$name" | grep -Eq 'statically linked|static-pie linked'
+          done
+      # Native runners can run what they built: the installer checks --version
+      # the same way.
+      - name: Smoke test
+        if: matrix.target != 'x86_64-apple-darwin'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          "target/$TARGET/release/herdr-stats" --version
+          "target/$TARGET/release/herdr-stats-bar" --version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.TAG }}
+          path: source
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          path: dist
+          merge-multiple: true
+      # The tag's section of CHANGELOG.md, everything up to the next heading.
+      - name: Release notes
+        run: |
+          awk -v version="${TAG#v}" '
+            index($0, "## [" version "]") == 1 { on = 1; next }
+            /^## \[/ { if (on) exit }
+            on
+          ' source/CHANGELOG.md > notes.md
+          test -s notes.md || echo "See CHANGELOG.md." > notes.md
+          cat notes.md
+      - name: Checksums
+        working-directory: dist
+        run: |
+          expected=(
+            herdr-stats-linux-x86_64.tar.gz
+            herdr-stats-linux-aarch64.tar.gz
+            herdr-stats-macos-x86_64.tar.gz
+            herdr-stats-macos-aarch64.tar.gz
+          )
+          for name in "${expected[@]}"; do
+            test -f "$name" || { echo "missing $name"; exit 1; }
+          done
+          sha256sum "${expected[@]}" > SHA256SUMS
+          cat SHA256SUMS
+      # Draft first, upload everything, then publish, so nobody downloads a
+      # half-filled release. A published release's assets are never replaced;
+      # a draft left by a failed run is refilled.
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "release $TAG is already published; refusing to replace its assets" >&2
+              exit 1
+            fi
+          else
+            gh release create "$TAG" --verify-tag --draft --title "$TAG" --notes-file notes.md
+          fi
+          gh release upload "$TAG" dist/* --clobber
+          gh release edit "$TAG" --draft=false
