@@ -108,7 +108,8 @@ status` shows whether the daemon is running; its log is
 
 herdr draws this part of the tab bar in a single colour and strips escape
 codes, so the stats cannot turn red when something is hot; the icons and
-gauges carry that instead. It also hides the stats when the tabs need the room.
+gauges carry that instead ([colour support is being discussed upstream](https://github.com/herdrdev/herdr/discussions/4305)).
+It also hides the stats when the tabs need the room.
 The icons need a [Nerd Font](https://www.nerdfonts.com); set `icons = "text"`
 otherwise.
 
